@@ -72,7 +72,7 @@ CREATE TABLE fact_rtt_waiting_times (
     CONSTRAINT fk_fact_treatment_function FOREIGN KEY (treatment_function_code) REFERENCES dim_treatment_functions(treatment_function_code),
     CONSTRAINT fk_fact_band FOREIGN KEY (band_id) REFERENCES dim_weeks_bands(band_id),
 
-    UNIQUE KEY uq_fact_row (period_date, provider_code, treatment_function_code, rtt_part_type, band_id)
+    UNIQUE KEY uq_fact_row (period_date, provider_code, commissioner_code, treatment_function_code, rtt_part_type, band_id)
 );
 
 -- ---------------------------------------------------------------------
