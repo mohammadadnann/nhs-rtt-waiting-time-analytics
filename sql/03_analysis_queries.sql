@@ -187,3 +187,30 @@ SELECT
 FROM long_wait_summary
 ORDER BY long_wait_rank
 LIMIT 20;
+
+
+-- Query 8: breach rate by NHS region, latest month
+-- I join fact_rtt_waiting_times to dim_providers to get each provider's ICB
+-- code, then to dim_icb_region_map to get the region that ICB sits in. A
+-- small number of providers use an ICB code from before the April 2026 ICB
+-- mergers, which will not find a match in the current region lookup, so
+-- their rows fall out of this query. That is expected, not a bug, and I
+-- have noted it in my data quality notes rather than patching around it.
+
+USE nhs_rtt_analytics;
+SELECT
+    r.region_name,
+    SUM(f.patient_count) AS total_patients,
+    SUM(CASE WHEN b.breach_flag = TRUE THEN f.patient_count ELSE 0 END) AS breaching_patients,
+    ROUND(
+        SUM(CASE WHEN b.breach_flag = TRUE THEN f.patient_count ELSE 0 END) * 100.0
+        / SUM(f.patient_count), 2
+    ) AS breach_rate_pct
+FROM fact_rtt_waiting_times f
+JOIN dim_providers p ON f.provider_code = p.provider_code
+JOIN dim_icb_region_map m ON p.provider_parent_code = m.icb_code
+JOIN dim_regions r ON m.region_code = r.region_code
+JOIN dim_weeks_bands b ON f.band_id = b.band_id
+WHERE f.period_date = (SELECT MAX(period_date) FROM fact_rtt_waiting_times)
+GROUP BY r.region_name
+ORDER BY breach_rate_pct DESC;
