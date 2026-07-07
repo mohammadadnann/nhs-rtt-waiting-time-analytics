@@ -24,7 +24,6 @@ JOIN dim_weeks_bands b ON f.band_id = b.band_id;
 --   2. Next highest breach rate percentage gets rank 2
 --   3. And so on, down to the lowest breach rate percentage
 -- I filter out providers under 100 patients so a handful of cases does not produce a misleading percentage.
-USE nhs_rtt_analytics;
 WITH provider_breach_summary AS (
     SELECT
         p.provider_code,
@@ -95,31 +94,34 @@ ORDER BY breach_rate_pct DESC;
 -- LAG pulls the previous period_date's breach rate into the same row as the current one,
 -- so the difference can be calculated directly. With only April 2026 loaded,
 -- prior_month_breach_rate_pct returns NULL for every row since there is no prior month yet.
+-- Query 5 (TREND): month on month change in breach rate per provider
+-- I calculate breach_rate_pct once in the first CTE, then use LAG in a
+-- second CTE to pull in each provider's previous month value. I need this
+-- as two separate steps because SQL will not let me filter on a column
+-- calculated by a window function in the same SELECT that creates it, so
+-- the WHERE clause at the end runs against the already finished result.
 WITH monthly_provider_breach AS (
     SELECT
         p.provider_code,
         p.provider_name,
         f.period_date,
-        SUM(CASE WHEN b.breach_flag = TRUE THEN f.patient_count ELSE 0 END) AS breaching_patients,
-        SUM(f.patient_count) AS total_patients
+        ROUND(SUM(CASE WHEN b.breach_flag = TRUE THEN f.patient_count ELSE 0 END)
+              * 100.0 / SUM(f.patient_count), 2) AS breach_rate_pct
     FROM fact_rtt_waiting_times f
     JOIN dim_providers p ON f.provider_code = p.provider_code
     JOIN dim_weeks_bands b ON f.band_id = b.band_id
     GROUP BY p.provider_code, p.provider_name, f.period_date
+),
+provider_trend AS (
+    SELECT
+        *,
+        LAG(breach_rate_pct) OVER (PARTITION BY provider_code ORDER BY period_date) AS prior_month_breach_rate_pct,
+        breach_rate_pct - LAG(breach_rate_pct) OVER (PARTITION BY provider_code ORDER BY period_date) AS change_in_breach_rate_pct
+    FROM monthly_provider_breach
 )
-SELECT
-    provider_code,
-    provider_name,
-    period_date,
-    ROUND(breaching_patients * 100.0 / total_patients, 2) AS breach_rate_pct,
-    LAG(ROUND(breaching_patients * 100.0 / total_patients, 2)) OVER (
-        PARTITION BY provider_code ORDER BY period_date
-    ) AS prior_month_breach_rate_pct,
-    ROUND(breaching_patients * 100.0 / total_patients, 2)
-        - LAG(ROUND(breaching_patients * 100.0 / total_patients, 2)) OVER (
-            PARTITION BY provider_code ORDER BY period_date
-          ) AS change_in_breach_rate_pct
-FROM monthly_provider_breach
+SELECT *
+FROM provider_trend
+WHERE prior_month_breach_rate_pct IS NOT NULL
 ORDER BY provider_code, period_date;
 
 
@@ -149,7 +151,7 @@ ORDER BY period_date;
 
 -- Query 7: providers with the highest share of patients waiting 52+ weeks
 -- 52 week waits are reported by NHS England as their own metric separate from
--- the 18 week standard, so I tracked it here as a distinct measure of severity.
+-- the 18 week standard, so I track it here as a distinct measure of severity.
 WITH long_wait_summary AS (
     SELECT
         p.provider_code,
