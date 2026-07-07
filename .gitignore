@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Raw NHS data files, downloaded locally, not tracked in git
+data/raw/*.csv
