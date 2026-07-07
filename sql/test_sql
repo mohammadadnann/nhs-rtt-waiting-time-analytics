@@ -1,1 +1,0 @@
-SELECT COUNT(*) FROM fact_rtt_waiting_times;
