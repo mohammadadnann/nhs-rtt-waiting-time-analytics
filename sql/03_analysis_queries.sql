@@ -1,12 +1,21 @@
 -- NHS England RTT Waiting Times analysis queries
--- Database currently holds one month of data (April 2026).
--- Queries 5 and 6 are marked TREND because they use LAG and rolling averages,
--- which only produce meaningful output once multiple months are loaded.
+-- Database currently holds 6 months of data, November 2025 through April 2026.
+-- Queries 2, 3, 4, and 7 rank providers or specialties as a leaderboard, so I
+-- filter them to the latest loaded month using MAX(period_date) rather than
+-- hardcoding a date. Without this filter, these queries would sum the same
+-- waiting patients across every month they appear in the incomplete pathway
+-- snapshot, since a patient still waiting in April was already counted in
+-- November, December, January, February, and March too. That is not a real
+-- total, it is the same person counted up to six times.
+-- Queries 5 and 6 are the trend queries, and correctly use every month on
+-- purpose, since a trend needs the full history to compare across.
 
 USE nhs_rtt_analytics;
 
--- Query 1: national breach rate against the 18 week RTT standard
--- I sum patient counts where breach_flag is true and divide by total patients.
+-- Query 1: national breach rate against the 18 week RTT standard, latest month
+-- I filter to the latest period_date here too, for the same reason as
+-- queries 2, 3, 4, and 7. A breach rate summed across 6 overlapping monthly
+-- snapshots would not be a meaningful percentage.
 SELECT
     SUM(CASE WHEN b.breach_flag = TRUE THEN f.patient_count ELSE 0 END) AS breaching_patients,
     SUM(f.patient_count) AS total_patients,
@@ -15,11 +24,13 @@ SELECT
         / SUM(f.patient_count), 2
     ) AS breach_rate_pct
 FROM fact_rtt_waiting_times f
-JOIN dim_weeks_bands b ON f.band_id = b.band_id;
+JOIN dim_weeks_bands b ON f.band_id = b.band_id
+WHERE f.period_date = (SELECT MAX(period_date) FROM fact_rtt_waiting_times);
 
 
--- Query 2: providers ranked by breach rate, worst first
--- The CTE aggregates patient counts per provider, then RANK orders them by breach rate.
+-- Query 2: providers ranked by breach rate, worst first, latest month
+-- The CTE aggregates patient counts per provider for the latest month only,
+-- then RANK orders them by breach rate.
 --   1. Highest breach rate percentage gets rank 1
 --   2. Next highest breach rate percentage gets rank 2
 --   3. And so on, down to the lowest breach rate percentage
@@ -33,6 +44,7 @@ WITH provider_breach_summary AS (
     FROM fact_rtt_waiting_times f
     JOIN dim_providers p ON f.provider_code = p.provider_code
     JOIN dim_weeks_bands b ON f.band_id = b.band_id
+    WHERE f.period_date = (SELECT MAX(period_date) FROM fact_rtt_waiting_times)
     GROUP BY p.provider_code, p.provider_name
     HAVING SUM(f.patient_count) >= 100
 )
@@ -48,7 +60,7 @@ ORDER BY breach_rank
 LIMIT 20;
 
 
--- Query 3: breach rate by treatment function (specialty), ranked nationally
+-- Query 3: breach rate by treatment function (specialty), ranked nationally, latest month
 -- Same pattern as Query 2, grouped by specialty instead of provider.
 WITH specialty_breach_summary AS (
     SELECT
@@ -59,6 +71,7 @@ WITH specialty_breach_summary AS (
     FROM fact_rtt_waiting_times f
     JOIN dim_treatment_functions tf ON f.treatment_function_code = tf.treatment_function_code
     JOIN dim_weeks_bands b ON f.band_id = b.band_id
+    WHERE f.period_date = (SELECT MAX(period_date) FROM fact_rtt_waiting_times)
     GROUP BY tf.treatment_function_code, tf.treatment_function_name
 )
 SELECT
@@ -71,7 +84,7 @@ FROM specialty_breach_summary
 ORDER BY breach_rank;
 
 
--- Query 4: breach rate aggregated to ICB level
+-- Query 4: breach rate aggregated to ICB level, latest month
 -- provider_parent_name holds the Integrated Care Board each provider reports into,
 -- so grouping on it gives a regional rollup without needing a separate join.
 SELECT
@@ -86,20 +99,19 @@ FROM fact_rtt_waiting_times f
 JOIN dim_providers p ON f.provider_code = p.provider_code
 JOIN dim_weeks_bands b ON f.band_id = b.band_id
 WHERE p.provider_parent_name IS NOT NULL
+    AND f.period_date = (SELECT MAX(period_date) FROM fact_rtt_waiting_times)
 GROUP BY p.provider_parent_name
 ORDER BY breach_rate_pct DESC;
 
 
--- Query 5 (TREND): month on month change in breach rate per provider
--- LAG pulls the previous period_date's breach rate into the same row as the current one,
--- so the difference can be calculated directly. With only April 2026 loaded,
--- prior_month_breach_rate_pct returns NULL for every row since there is no prior month yet.
 -- Query 5 (TREND): month on month change in breach rate per provider
 -- I calculate breach_rate_pct once in the first CTE, then use LAG in a
 -- second CTE to pull in each provider's previous month value. I need this
 -- as two separate steps because SQL will not let me filter on a column
 -- calculated by a window function in the same SELECT that creates it, so
 -- the WHERE clause at the end runs against the already finished result.
+-- This query correctly uses every month, unlike queries 1 to 4 and 7,
+-- since a month on month trend needs the full history to compare across.
 WITH monthly_provider_breach AS (
     SELECT
         p.provider_code,
@@ -127,8 +139,8 @@ ORDER BY provider_code, period_date;
 
 -- Query 6 (TREND): three month rolling average of the national breach rate
 -- The window frame ROWS BETWEEN 2 PRECEDING AND CURRENT ROW averages the
--- current month with the two before it. Needs three or more months loaded
--- before the average reflects an actual trend rather than a single value.
+-- current month with the two before it. This query also correctly uses
+-- every month on purpose, same reason as Query 5.
 WITH monthly_national_breach AS (
     SELECT
         f.period_date,
@@ -149,7 +161,7 @@ FROM monthly_national_breach
 ORDER BY period_date;
 
 
--- Query 7: providers with the highest share of patients waiting 52+ weeks
+-- Query 7: providers with the highest share of patients waiting 52+ weeks, latest month
 -- 52 week waits are reported by NHS England as their own metric separate from
 -- the 18 week standard, so I track it here as a distinct measure of severity.
 WITH long_wait_summary AS (
@@ -161,6 +173,7 @@ WITH long_wait_summary AS (
     FROM fact_rtt_waiting_times f
     JOIN dim_providers p ON f.provider_code = p.provider_code
     JOIN dim_weeks_bands b ON f.band_id = b.band_id
+    WHERE f.period_date = (SELECT MAX(period_date) FROM fact_rtt_waiting_times)
     GROUP BY p.provider_code, p.provider_name
     HAVING SUM(f.patient_count) >= 100
 )
