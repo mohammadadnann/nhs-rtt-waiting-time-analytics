@@ -1,0 +1,12 @@
+# NHS RTT project settings
+# This file holds settings that are safe to commit to git, paths and
+# folder names. Anything sensitive, like the database password, lives in
+# .env instead, which is never committed.
+
+paths:
+  raw_data_dir: data/raw
+  reference_data_dir: data/reference
+  region_lookup_file: data/reference/icb_region_lookup.csv
+
+database:
+  name: nhs_rtt_analytics
