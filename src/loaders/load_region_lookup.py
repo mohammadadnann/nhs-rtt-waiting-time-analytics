@@ -1,6 +1,5 @@
 """
 NHS Region dimension, data loading script
-Project: NHS RTT SQL Driven Business Analytics and Breach Risk Forecasting
 
 This script reads the ONS ICB to NHS England Region lookup and loads it as
 two small dimension tables: dim_regions and dim_icb_region_map. Unlike the
